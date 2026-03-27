@@ -1,4 +1,6 @@
-// Verifies a Gumroad license key and returns the product tier
+// Verifies a license key exists in the database and is valid
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 export default async (req) => {
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
@@ -8,70 +10,79 @@ export default async (req) => {
   }
 
   try {
-    const { license_key } = await req.json();
+    const { license_key, user_email } = await req.json();
 
     if (!license_key) {
-      return new Response(JSON.stringify({ success: false, error: "No license key provided" }), {
+      return new Response(JSON.stringify({ valid: false, error: "No license key provided" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    // Call Gumroad License Verification API
-    const gumroadRes = await fetch("https://api.gumroad.com/v2/licenses/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        product_id: Netlify.env.get("GUMROAD_PRODUCT_ID") || "",
-        license_key,
-        increment_uses_count: "false", // Don't burn uses on verification
-      }),
-    });
+    const supabaseUrl = Netlify.env.get("VITE_SUPABASE_URL");
+    const supabaseServiceKey = Netlify.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-    const data = await gumroadRes.json();
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return new Response(JSON.stringify({ valid: false, error: "Server misconfigured" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
-    if (!data.success) {
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    const { data: keyRow, error } = await supabase
+      .from("license_keys")
+      .select("*")
+      .eq("key_code", license_key.trim().toUpperCase())
+      .single();
+
+    if (error || !keyRow) {
       return new Response(JSON.stringify({
-        success: false,
-        error: "Invalid or expired license key",
+        valid: false,
+        error: "This license key was not found. Please check and try again.",
       }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    // Determine tier from Gumroad product variant or purchase info
-    // Customize this logic based on your Gumroad product setup:
-    //   - Option A: Different products per tier (check product_id)
-    //   - Option B: Variants within one product (check variant name)
-    //   - Option C: Price-based (check price)
-    const purchase = data.purchase || {};
-    const variantName = (purchase.variants || "").toLowerCase();
-    const price = purchase.price || 0;
-
-    let tier = "grow"; // default paid tier
-    if (variantName.includes("forever") || variantName.includes("lifetime")) {
-      tier = "forever";
-    } else if (variantName.includes("dominate")) {
-      tier = "dominate";
-    } else if (variantName.includes("scale")) {
-      tier = "scale";
-    } else if (variantName.includes("grow")) {
-      tier = "grow";
+    if (keyRow.status === "revoked") {
+      return new Response(JSON.stringify({
+        valid: false,
+        error: "This license key has been revoked.",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
-    // Price fallback if variant names aren't set
-    if (tier === "grow" && !variantName) {
-      if (price >= 19900) tier = "forever";
-      else if (price >= 9900) tier = "dominate";
-      else if (price >= 4900) tier = "scale";
+
+    if (keyRow.status === "claimed" && keyRow.claimed_by && user_email && keyRow.claimed_by !== user_email) {
+      return new Response(JSON.stringify({
+        valid: false,
+        error: "This license key has already been claimed by another account.",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Mark as claimed if not already
+    if (keyRow.status === "issued") {
+      await supabase
+        .from("license_keys")
+        .update({
+          status: "claimed",
+          claimed_by: user_email || "unknown",
+          claimed_at: new Date().toISOString(),
+        })
+        .eq("id", keyRow.id);
     }
 
     return new Response(JSON.stringify({
-      success: true,
-      tier,
-      email: purchase.email || null,
-      license_key,
-      uses: data.uses || 0,
+      valid: true,
+      tier: keyRow.tier,
+      duration_days: keyRow.duration_days,
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -79,7 +90,7 @@ export default async (req) => {
 
   } catch (err) {
     return new Response(JSON.stringify({
-      success: false,
+      valid: false,
       error: err.message || "License verification failed",
     }), {
       status: 500,

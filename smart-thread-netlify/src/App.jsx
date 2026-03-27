@@ -1420,36 +1420,57 @@ export default function SmartThread() {
     if (!key) return;
     setLicenseStatus("checking");
 
-    // Decode the key locally — no API call needed
-    const decoded = decodeLicenseKey(key);
+    try {
+      // Server-side verification — checks key exists in DB, not revoked, not claimed by someone else
+      const res = await fetch("/api/verify-license", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          license_key: key,
+          user_email: userEmail || accountEmail || "",
+        }),
+      });
 
-    if (!decoded) {
-      setLicenseStatus("invalid");
-      return;
-    }
+      const data = await res.json();
 
-    const { tier, days, isPermanent } = decoded;
-    const expiry = isPermanent ? null : new Date(Date.now() + days * 86400000).toISOString();
+      if (!data.valid) {
+        setLicenseStatus("invalid");
+        setError(data.error || "Invalid license key");
+        return;
+      }
 
-    setLicenseKey(key);
-    setLicenseStatus("valid");
-    setPlan(tier);
-    setLicenseExpiry(expiry);
-    setPlanExpired(false);
-    hybridSaveAccount({
-      licenseKey: key, licenseStatus: "valid", plan: tier,
-      licenseExpiry: expiry,
-    });
+      // Server confirmed key is valid — activate
+      const { tier, duration_days } = data;
+      const expiry = duration_days === 0 ? null : new Date(Date.now() + duration_days * 86400000).toISOString();
 
-    // Mark key as claimed in the license_keys table
-    if (supabase) {
-      try {
-        await supabase.from("license_keys").update({
-          status: "claimed",
-          claimed_by: userEmail || accountEmail || userId,
-          claimed_at: new Date().toISOString(),
-        }).eq("key_code", key);
-      } catch {}
+      setLicenseKey(key);
+      setLicenseStatus("valid");
+      setPlan(tier);
+      setLicenseExpiry(expiry);
+      setPlanExpired(false);
+      setError(null);
+      hybridSaveAccount({
+        licenseKey: key, licenseStatus: "valid", plan: tier,
+        licenseExpiry: expiry,
+      });
+    } catch (e) {
+      // If server is unreachable, fall back to local decode
+      const decoded = decodeLicenseKey(key);
+      if (!decoded) {
+        setLicenseStatus("invalid");
+        return;
+      }
+      const { tier, days, isPermanent } = decoded;
+      const expiry = isPermanent ? null : new Date(Date.now() + days * 86400000).toISOString();
+      setLicenseKey(key);
+      setLicenseStatus("valid");
+      setPlan(tier);
+      setLicenseExpiry(expiry);
+      setPlanExpired(false);
+      hybridSaveAccount({
+        licenseKey: key, licenseStatus: "valid", plan: tier,
+        licenseExpiry: expiry,
+      });
     }
   }
 
