@@ -1475,11 +1475,30 @@ export default function SmartThread() {
     if (supabase) {
       await supabase.auth.signOut();
     }
-    // Clear skipAuth so auth screen shows again
-    const store = loadStore();
-    delete store.skipAuth;
-    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+    // Clear all account data from localStorage
+    localStorage.removeItem(STORE_KEY);
+    // Reset all state to defaults
+    setPlan("seed");
+    setRole("user");
+    setGiftedPlan(null);
+    setLicenseKey("");
+    setLicenseInput("");
+    setLicenseStatus("none");
+    setLicenseExpiry(null);
+    setPlanExpired(false);
+    setGens(0);
+    setRw(0);
+    setBonusGens(0);
+    setAccountEmail("");
+    setProfiles([]);
+    setActiveProfile(null);
+    setHistory([]);
+    setAdminStats(null);
+    setAdminClaimedKeys([]);
+    setPendingRewards([]);
+    setCompletedRewards([]);
     setSession(null);
+    setView("home");
   }
 
   async function sendFeedback() {
